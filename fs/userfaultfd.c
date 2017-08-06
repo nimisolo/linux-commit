@@ -408,6 +408,9 @@ int handle_userfault(struct vm_fault *vmf, unsigned long reason)
 	}
 
 	/*
+ 	 * 在async page fault场景下，从此处返回，即返回VM_FAULT_RETRY
+ 	 */
+	/*
 	 * Handle nowait, not much to do other than tell it to retry
 	 * and wait.
 	 */

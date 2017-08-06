@@ -393,6 +393,16 @@ static int faultin_page(struct task_struct *tsk, struct vm_area_struct *vma,
 		fault_flags |= FAULT_FLAG_REMOTE;
 	if (nonblocking)
 		fault_flags |= FAULT_FLAG_ALLOW_RETRY;
+	/*
+ 	 * FOLL_NOWAIT表示：if a disk transfer is needed, start the IO and return without waiting upon it。
+ 	 * FAULT_FLAG_ALLOW_RETRY表示：Retry fault if blocking。
+ 	 * FAULT_FLAG_RETRY_NOWAIT表示：Don't drop mmap_sem and wait when retrying 在retry时不wait。
+ 	 *
+ 	 * 上面三者组合起来用：如果页面需要从外部读取数据并填充（例如：页面被swapout了）则不会发生阻塞，会
+ 	 * 立刻返回原任务。这是由使用get user page类函数所引起的。
+ 	 * 
+ 	 * KVM async page fault特性便使用了此特性。
+	 */
 	if (*flags & FOLL_NOWAIT)
 		fault_flags |= FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_RETRY_NOWAIT;
 	if (*flags & FOLL_TRIED) {
@@ -416,6 +426,10 @@ static int faultin_page(struct task_struct *tsk, struct vm_area_struct *vma,
 			tsk->min_flt++;
 	}
 
+	/*
+ 	 * 在async page fault场景下，会返回VM_FAULT_RETRY，所以走到此处，nonblocking被设为0
+ 	 * 返回-EBUSY
+ 	 */
 	if (ret & VM_FAULT_RETRY) {
 		if (nonblocking)
 			*nonblocking = 0;
@@ -606,6 +620,9 @@ retry:
 			case -ENOMEM:
 			case -EHWPOISON:
 				return i ? i : ret;
+			/*
+ 			 * async page fault场景下，从gup从此处返回，此时i=0，所以返回0
+ 			 */
 			case -EBUSY:
 				return i;
 			case -ENOENT:

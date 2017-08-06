@@ -1339,6 +1339,9 @@ unsigned long kvm_vcpu_gfn_to_hva_prot(struct kvm_vcpu *vcpu, gfn_t gfn, bool *w
 static int get_user_page_nowait(unsigned long start, int write,
 		struct page **page)
 {
+	/*
+ 	 * flags中使用了FOLL_NOWAIT，具体作用看faultin_page中描述
+	 */
 	int flags = FOLL_NOWAIT | FOLL_HWPOISON;
 
 	if (write)
@@ -1405,6 +1408,10 @@ static int hva_to_pfn_slow(unsigned long addr, bool *async, bool write_fault,
 
 	if (async) {
 		down_read(&current->mm->mmap_sem);
+		/*
+ 		 * 在async page fault场景中，如果请求的页面此时不在内存中（被swap out了），则
+ 		 * get_user_page_nowait返回的是0
+ 		 */
 		npages = get_user_page_nowait(addr, write_fault, page);
 		up_read(&current->mm->mmap_sem);
 	} else {
@@ -1545,6 +1552,9 @@ retry:
 		if (r < 0)
 			pfn = KVM_PFN_ERR_FAULT;
 	} else {
+		/*
+ 		 * async page fault场景中会走这条分支
+ 		 */
 		if (async && vma_is_valid(vma, write_fault))
 			*async = true;
 		pfn = KVM_PFN_ERR_FAULT;
@@ -1578,6 +1588,9 @@ kvm_pfn_t __gfn_to_pfn_memslot(struct kvm_memory_slot *slot, gfn_t gfn,
 		writable = NULL;
 	}
 
+	/*
+ 	 * async page fault场景中，会返回KVM_PFN_ERR_FAULT，并且async被设置为true
+ 	 */
 	return hva_to_pfn(addr, atomic, async, write_fault,
 			  writable);
 }

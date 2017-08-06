@@ -3728,6 +3728,14 @@ static bool try_async_pf(struct kvm_vcpu *vcpu, bool prefault, gfn_t gfn,
 			trace_kvm_async_pf_doublefault(gva, gfn);
 			kvm_make_request(KVM_REQ_APF_HALT, vcpu);
 			return true;
+		/*
+ 		 * kvm_arch_setup_async_pf中会创建一个work（即另外一个context），然后向guest注入
+ 		 * KVM_PV_REASON_PAGE_NOT_PRESENT，这样vcpu就可以返回guest，guest内部会阻塞缺页的
+ 		 * 任务，然后调度其他任务运行。
+ 		 * work的执行函数是async_pf_execute，它会以wait方式去获取页面，当页面被读取进来后，
+ 		 * 再向vcpu注入KVM_PV_REASON_PAGE_READY，这样guest内部会将原先被缺页的（guest内的）
+ 		 * 任务给唤醒。
+ 		 */
 		} else if (kvm_arch_setup_async_pf(vcpu, gva, gfn))
 			return true;
 	}
