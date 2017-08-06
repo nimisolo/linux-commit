@@ -172,7 +172,13 @@ struct uffdio_range {
 };
 
 struct uffdio_register {
+	/* 想进行userfault处理的地址区间 */
 	struct uffdio_range range;
+	/*
+ 	 * 想处理的pege fault类型：
+ 	 * 1）UFFDIO_REGISTER_MODE_MISSING：页面不存在异常
+ 	 * 2）UFFDIO_REGISTER_MODE_WP：写保护异常
+ 	 */
 #define UFFDIO_REGISTER_MODE_MISSING	((__u64)1<<0)
 #define UFFDIO_REGISTER_MODE_WP		((__u64)1<<1)
 	__u64 mode;
@@ -181,6 +187,9 @@ struct uffdio_register {
 	 * kernel answers which ioctl commands are available for the
 	 * range, keep at the end as the last 8 bytes aren't read.
 	 */
+	/*
+ 	 * 内核不会读取此域，反而会向它写入信息：指定range内支持哪些ioctl命令，这样用户态便可获知。
+ 	 */
 	__u64 ioctls;
 };
 

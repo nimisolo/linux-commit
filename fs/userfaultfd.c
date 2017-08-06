@@ -1204,17 +1204,21 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 
 	user_uffdio_register = (struct uffdio_register __user *) arg;
 
+	/* 读取用户态传入的范围注册信息，注意最后64bit不会读进来 */
 	ret = -EFAULT;
 	if (copy_from_user(&uffdio_register, user_uffdio_register,
 			   sizeof(uffdio_register)-sizeof(__u64)))
 		goto out;
 
+	/* 检查mode是否合法：不能为0、也不能是内核当前不支持的 */
 	ret = -EINVAL;
 	if (!uffdio_register.mode)
 		goto out;
 	if (uffdio_register.mode & ~(UFFDIO_REGISTER_MODE_MISSING|
 				     UFFDIO_REGISTER_MODE_WP))
 		goto out;
+
+	/* 构建相应的vma flags。当前还不支持WriteProtect */
 	vm_flags = 0;
 	if (uffdio_register.mode & UFFDIO_REGISTER_MODE_MISSING)
 		vm_flags |= VM_UFFD_MISSING;
@@ -1228,11 +1232,13 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 		goto out;
 	}
 
+	/* 检查想监控的地址范围是否合法：对齐？大小符合限制？ */
 	ret = validate_range(mm, uffdio_register.range.start,
 			     uffdio_register.range.len);
 	if (ret)
 		goto out;
 
+	/* 要监控范围的起始地址 */
 	start = uffdio_register.range.start;
 	end = start + uffdio_register.range.len;
 
@@ -1241,10 +1247,18 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 		goto out;
 
 	down_write(&mm->mmap_sem);
+	/*
+	 * 找到第一个满足 start<vm_end 的vma（start可能在此vma中、也可能在其左边、
+	 * 也有可能此vma是在指定区间内部的），并把此vma的前一个vma地址保存在prev中
+	 */
 	vma = find_vma_prev(mm, start, &prev);
 	if (!vma)
 		goto out_unlock;
 
+	/*
+ 	 * 如果vm_start>=end则表示想监控区间在此vma的左边。联系上面，说明这个区间
+ 	 * 不属于任何vma
+ 	 */
 	/* check that there's at least one vma in the range */
 	ret = -EINVAL;
 	if (vma->vm_start >= end)
@@ -1310,7 +1324,25 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 		found = true;
 	}
 	BUG_ON(!found);
+	/*
+ 	 * 执行到这里，指定区间与vmas可能的关系为：
+	 *       start   startx                            end  endx
+	 *          +      +                                 +   +
+	 *          |      |                                 |   |
+	 *          |      |                                 |   |
+	 *          |      |                                 |   |
+	 *   +----+ v  +---v---+ +---------+ +----------+ +--v--->
+	 *   |    |    |       | |         | |          | |      |
+	 *   +----+    +-------+ +---------+ +----------+ +------+
+	 *   ^         ^
+	 *   +         +
+	 * prev       vma
+ 	 */
 
+	/*
+ 	 * 如果此条件成立（例如上图的'startx'），则修正prev。
+ 	 * 如此看来，prev涵义是指向小于且离start最近的vma
+ 	 */
 	if (vma->vm_start < start)
 		prev = vma;
 
@@ -1318,6 +1350,11 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 	do {
 		cond_resched();
 
+		/*
+ 		 * 疑问：这几句应该可以不需要吧？因为上面for循环会便利这个while循环中要访问到的vmas阿!
+ 		 * 
+ 		 * 应该还是有需要的，因为下面可能会设置为new_flags(即会改变flags)
+ 		 */
 		BUG_ON(!vma_can_userfault(vma));
 		BUG_ON(vma->vm_userfaultfd_ctx.ctx &&
 		       vma->vm_userfaultfd_ctx.ctx != ctx);
@@ -1330,10 +1367,12 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 		    (vma->vm_flags & vm_flags) == vm_flags)
 			goto skip;
 
+		/* 修正start与vma_end，此时（start，vma_end）属于vma（包括和相等） */
 		if (vma->vm_start > start)
 			start = vma->vm_start;
 		vma_end = min(end, vma->vm_end);
 
+		/* 尝试merge相邻vmas, 能merge的话直接处理下一个（未合并的） */
 		new_flags = (vma->vm_flags & ~vm_flags) | vm_flags;
 		prev = vma_merge(mm, prev, start, vma_end, new_flags,
 				 vma->anon_vma, vma->vm_file, vma->vm_pgoff,
@@ -1343,6 +1382,12 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 			vma = prev;
 			goto next;
 		}
+
+		/*
+		 * 下面两个说明start、end不是恰好是一个vma的边界，则需要分割一下。
+		 * 因为[vma->vm_start,start) 和 (end,vma->vm_end]这两块多出来的
+		 * 用户并不需要监控。
+		 */
 		if (vma->vm_start < start) {
 			ret = split_vma(mm, vma, start, 1);
 			if (ret)
@@ -1371,6 +1416,9 @@ out_unlock:
 	up_write(&mm->mmap_sem);
 	mmput(mm);
 	if (!ret) {
+		/*
+ 		 * 告诉用户态，在所监控的区间上哪些功能是允许的
+ 		 */
 		/*
 		 * Now that we scanned all vmas we can already tell
 		 * userland which ioctls methods are guaranteed to
