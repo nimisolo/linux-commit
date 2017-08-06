@@ -1687,12 +1687,14 @@ static int userfaultfd_api(struct userfaultfd_ctx *ctx,
 	__u64 features;
 
 	ret = -EINVAL;
+	/* ctx初始化完成时是UFFD_STATE_WAIT_API状态，如果已经调过UFFDIO_API了，则不是 */
 	if (ctx->state != UFFD_STATE_WAIT_API)
 		goto out;
 	ret = -EFAULT;
 	if (copy_from_user(&uffdio_api, buf, sizeof(uffdio_api)))
 		goto out;
 	features = uffdio_api.features;
+	/* 如果用户请求的功能中存在当前不支持的，则返回错误 */
 	if (uffdio_api.api != UFFD_API || (features & ~UFFD_API_FEATURES)) {
 		memset(&uffdio_api, 0, sizeof(uffdio_api));
 		if (copy_to_user(buf, &uffdio_api, sizeof(uffdio_api)))
@@ -1701,19 +1703,23 @@ static int userfaultfd_api(struct userfaultfd_ctx *ctx,
 		goto out;
 	}
 	/* report all available features and ioctls to userland */
+	/* 告诉用户我们支持的所有功能 */
 	uffdio_api.features = UFFD_API_FEATURES;
 	uffdio_api.ioctls = UFFD_API_IOCTLS;
 	ret = -EFAULT;
 	if (copy_to_user(buf, &uffdio_api, sizeof(uffdio_api)))
 		goto out;
+	/* 将ctx状态切换成UFFD_STATE_RUNNING */
 	ctx->state = UFFD_STATE_RUNNING;
 	/* only enable the requested features for this uffd context */
+	/* 对于此userfaultfd，我们只使能用户请求的那些功能 */
 	ctx->features = uffd_ctx_features(features);
 	ret = 0;
 out:
 	return ret;
 }
 
+/* 用户态程序通过ioctl访问userfaultfd时会进入此函数 */
 static long userfaultfd_ioctl(struct file *file, unsigned cmd,
 			      unsigned long arg)
 {
