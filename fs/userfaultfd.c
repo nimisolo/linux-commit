@@ -1819,21 +1819,25 @@ static struct file *userfaultfd_file_create(int flags)
 	struct file *file;
 	struct userfaultfd_ctx *ctx;
 
+	/* 内核线程不需要此功能 */
 	BUG_ON(!current->mm);
 
 	/* Check the UFFD_* constants for consistency.  */
 	BUILD_BUG_ON(UFFD_CLOEXEC != O_CLOEXEC);
 	BUILD_BUG_ON(UFFD_NONBLOCK != O_NONBLOCK);
 
+	/* 只接受UFFD_SHARED_FCNTL_FLAGS中所定义的flags，否则直接返回错误 */
 	file = ERR_PTR(-EINVAL);
 	if (flags & ~UFFD_SHARED_FCNTL_FLAGS)
 		goto out;
 
+	/* 分配一个userfaultfd_ctx对象 */
 	file = ERR_PTR(-ENOMEM);
 	ctx = kmem_cache_alloc(userfaultfd_ctx_cachep, GFP_KERNEL);
 	if (!ctx)
 		goto out;
 
+	/* 这一段是对刚才分配的userfaultfd_ctx对象进行简单初始化 */
 	atomic_set(&ctx->refcount, 1);
 	ctx->flags = flags;
 	ctx->features = 0;
@@ -1843,6 +1847,10 @@ static struct file *userfaultfd_file_create(int flags)
 	/* prevent the mm struct to be freed */
 	mmgrab(ctx->mm);
 
+	/*
+ 	 * 创建一个匿名文件，其private_date会被设置为ctx（即刚才分配的userfaultfd_ctx对象）
+ 	 * 此文件的操作函数为userfaultfd_fops指定的。
+ 	 */
 	file = anon_inode_getfile("[userfaultfd]", &userfaultfd_fops, ctx,
 				  O_RDWR | (flags & UFFD_SHARED_FCNTL_FLAGS));
 	if (IS_ERR(file)) {
@@ -1853,21 +1861,33 @@ out:
 	return file;
 }
 
+/*
+ * 用户态程序通过userfaultfd(int flags)来创建一个与内核进行通信的fd
+ */
 SYSCALL_DEFINE1(userfaultfd, int, flags)
 {
 	int fd, error;
 	struct file *file;
 
+	/*
+ 	 * 获得一个空闲的fd
+ 	 */
 	error = get_unused_fd_flags(flags & UFFD_SHARED_FCNTL_FLAGS);
 	if (error < 0)
 		return error;
 	fd = error;
 
+	/*
+ 	 * 创建用于userfault的file，并将其private_data设置为一个userfaultfd_ctx对象
+ 	 */
 	file = userfaultfd_file_create(flags);
 	if (IS_ERR(file)) {
 		error = PTR_ERR(file);
 		goto err_put_unused_fd;
 	}
+	/*
+ 	 * 关联fd与上面创建的file，这样用户态就可以通过fd操作该文件了
+ 	 */
 	fd_install(fd, file);
 
 	return fd;
