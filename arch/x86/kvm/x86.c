@@ -8203,15 +8203,23 @@ int kvm_arch_create_memslot(struct kvm *kvm, struct kvm_memory_slot *slot,
 {
 	int i;
 
+	/*
+	 * 这个for循环会根据每一种可能的page大小（4K/2M/1G）进行初始化设置
+	 */
 	for (i = 0; i < KVM_NR_PAGE_SIZES; ++i) {
 		struct kvm_lpage_info *linfo;
 		unsigned long ugfn;
 		int lpages;
 		int level = i + 1;
 
+		/* 此轮page size（4K/2M/1G）情况下，这个slot有多少个页面 */
 		lpages = gfn_to_index(slot->base_gfn + npages - 1,
 				      slot->base_gfn, level) + 1;
 
+		/*
+		 * rmap可以理解为二维数组，rmap[page size][gfn]表示指定page size下
+ 		 * 指定gfn的反向映射信息
+		 */
 		slot->arch.rmap[i] =
 			kvzalloc(lpages * sizeof(*slot->arch.rmap[i]), GFP_KERNEL);
 		if (!slot->arch.rmap[i])

@@ -96,6 +96,7 @@
 #define UNMAPPED_GVA (~(gpa_t)0)
 
 /* KVM Hugepage definitions for x86 */
+/* KVM_NR_PAGE_SIZES表示当前支持3种大小的页面：4K/2M/1G */
 #define KVM_NR_PAGE_SIZES	3
 #define KVM_HPAGE_GFN_SHIFT(x)	(((x) - 1) * 9)
 #define KVM_HPAGE_SHIFT(x)	(PAGE_SHIFT + KVM_HPAGE_GFN_SHIFT(x))
@@ -270,6 +271,9 @@ struct kvm_rmap_head {
 	unsigned long val;
 };
 
+/*
+ * 此结构代表了一个用作影子/ept页表的host页面
+ */
 struct kvm_mmu_page {
 	struct list_head link;
 	struct hlist_node hash_link;
@@ -287,6 +291,7 @@ struct kvm_mmu_page {
 	bool unsync;
 	int root_count;          /* Currently serving as active root */
 	unsigned int unsync_children;
+	/* 反向映射，用于跟踪有哪些父级表项指向了我 */
 	struct kvm_rmap_head parent_ptes; /* rmap pointers to parent sptes */
 
 	/* The page is obsolete if mmu_valid_gen != kvm->arch.mmu_valid_gen.  */
@@ -684,7 +689,14 @@ struct kvm_lpage_info {
 	int disallow_lpage;
 };
 
+/* 描述一个memory slot的附加的、体系结构相关的一些信息 */
 struct kvm_arch_memory_slot {
+	/*
+	 * 一个虚拟mem slot中，host端影子/ept页表可以映射KVM_NR_PAGE_SIZES（3）种
+	 * 类型的页面。
+	 *
+	 * rmap用于存储此slot中各gfn所对应的反向映射
+	 */
 	struct kvm_rmap_head *rmap[KVM_NR_PAGE_SIZES];
 	struct kvm_lpage_info *lpage_info[KVM_NR_PAGE_SIZES - 1];
 	unsigned short *gfn_track[KVM_PAGE_TRACK_MAX];

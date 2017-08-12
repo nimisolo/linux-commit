@@ -149,6 +149,10 @@ module_param(dbg, bool, 0644);
 /* make pte_list_desc fit well in cache line */
 #define PTE_LIST_EXT 3
 
+/*
+ * 此结构中可存储3个spte，如果超过了3个则more指向了一个新的对象，可用于存储后续3个；
+ * 以此类推...
+ */
 struct pte_list_desc {
 	u64 *sptes[PTE_LIST_EXT];
 	struct pte_list_desc *more;
@@ -1085,6 +1089,22 @@ static int mapping_level(struct kvm_vcpu *vcpu, gfn_t large_gfn,
  * in this rmap chain. Otherwise, (rmap_head->val & ~1) points to a struct
  * pte_list_desc containing more mappings.
  */
+/*
+ * 上面这段注释很重要，说明了rmap_head->val的涵义：
+ * 1）如果val整个为0，则表示此val还没被使用过【根据下面代码自己加的】
+ * 2）如果val不为0、且bit-0为0，则此val已经存储了一个spte
+ * 3）如果val的bit-0不为0，则此val指向的是一个pte_list_desc对象
+ *
+ * 通常情况下，一个gfn对应一个spte；但是有可能也有例外，即有多个spte
+ * 映射同一个gfn。因此rmap和pte_list_desc的设计中考虑得较为周全，并且
+ * pte_list_add函数中也能包容各种情况。
+ *
+ * pte_list_add函数返回：在加入此spte之前（rmap_head）对应的gfn已经有
+ * 多少个反向映射了。
+ * 
+ * *重要补充*： rmap_head并不一定只对应gfn，还可以对应mmu page本身！也
+ * 		就是说，mmu page本身也可以有与其上一级页表项的反向映射。
+ */
 
 /*
  * Returns the number of pointers in the rmap chain, not counting the new one.
@@ -1095,9 +1115,30 @@ static int pte_list_add(struct kvm_vcpu *vcpu, u64 *spte,
 	struct pte_list_desc *desc;
 	int i, count = 0;
 
+	/*
+	 * 由 0 --> 1 的情况：
+	 *
+	 * 如果此rmap_head->val没被使用过（e.g. 第一次建立rmap），则直接将sptep
+	 * 存储在val即可（sptep肯定是8的倍数，因为每个pte占8字节），其bit-0自然
+	 * 为0.
+	 */
 	if (!rmap_head->val) {
 		rmap_printk("pte_list_add: %p %llx 0->1\n", spte, *spte);
 		rmap_head->val = (unsigned long)spte;
+
+	/*
+	 * 由 1 --> many 的情况：
+	 *
+	 * rmap_head->val有值、且bit-0为0，说明此前（rmap_head）对应的gfn已映射
+	 * 到一个spte。
+	 *
+	 * 现在的操作是要继续给此gfn添加一个反向映射，超过一个的情况需要使用到
+	 * pte_list_desc了：
+	 * 1）分配一个pte_list_desc对象
+	 * 2）将第一个映射（此刻还存储在val中）保存在desc->sptes[0]中
+	 * 3）将第二个映射（即spte）放到下一个位置即desc->sptes[1]中
+	 * 4）将pte_list_desc对象保存在val中，并将val的bit-0置1
+	 */
 	} else if (!(rmap_head->val & 1)) {
 		rmap_printk("pte_list_add: %p %llx 1->many\n", spte, *spte);
 		desc = mmu_alloc_pte_list_desc(vcpu);
@@ -1105,19 +1146,53 @@ static int pte_list_add(struct kvm_vcpu *vcpu, u64 *spte,
 		desc->sptes[1] = spte;
 		rmap_head->val = (unsigned long)desc | 1;
 		++count;
+
+	/*
+	 * 由 many --> many 的情况：
+	 *
+	 * rmap_head->val有值、且bit-0为1，说明此前（rmap_head）对应的gfn已映射
+	 * 到多个spte了，已经使用pte_list_desc来存储了。
+	 *
+	 * 现在要给此gfn添加一个新的反向映射，此时就要根据当前pte_list_desc具体
+	 * 使用情款来决定如何处理了。
+	 *
+	 * 见下面具体分析
+	 */
 	} else {
 		rmap_printk("pte_list_add: %p %llx many->many\n", spte, *spte);
+		/* 首先获取第一个desc，要准备从它开始遍历了 */
 		desc = (struct pte_list_desc *)(rmap_head->val & ~1ul);
+		/*
+ 		 * 一个desc对象中可以存储PTE_LIST_EXT（当前为3）个spte。
+ 		 * 如果desc->sptes[PTE_LIST_EXT-1] ！= NULL 则说明该desc已经存满
+ 		 * 了；
+ 		 * 如果desc->more ！= NULL 则说明后面还链有一个desc；
+ 		 *
+ 		 * 综上，此while循环作用是找到最后一个desc。
+		 */
 		while (desc->sptes[PTE_LIST_EXT-1] && desc->more) {
 			desc = desc->more;
 			count += PTE_LIST_EXT;
 		}
+		/*
+		 * 此时，desc已经指向（rmap_head）对应的gfn的反向映射单链表的最后
+		 * 一个pte_list_desc对象了。
+		 *
+		 * 如果最后一个（当前）desc也存满了，则再分配一个desc对象，然后将
+		 * 当前的more指针指向新desc对象，此时新desc成为了最后一个。
+		 */
 		if (desc->sptes[PTE_LIST_EXT-1]) {
 			desc->more = mmu_alloc_pte_list_desc(vcpu);
 			desc = desc->more;
 		}
 		for (i = 0; desc->sptes[i]; ++i)
 			++count;
+		/*
+		 * 此时，desc指向了最后一个个pte_list_desc对象，i为desc中空闲元素的
+		 * 索引。
+		 *
+		 * 将spte存储在这个空闲元素内。
+		 */
 		desc->sptes[i] = spte;
 	}
 	return count;
@@ -1146,6 +1221,12 @@ pte_list_desc_remove_entry(struct kvm_rmap_head *rmap_head,
 	mmu_free_pte_list_desc(desc);
 }
 
+/*
+ * pte_list_remove函数作用是：从指定的反向映射记录链（rmap_head）中移除
+ * 			      指定的记录（spte）
+ *
+ * 这函数较为简单，不详细描述，三个分支的涵义可以参考pte_list_add中的注释。
+ */
 static void pte_list_remove(u64 *spte, struct kvm_rmap_head *rmap_head)
 {
 	struct pte_list_desc *desc;
@@ -1210,6 +1291,7 @@ static bool rmap_can_add(struct kvm_vcpu *vcpu)
 	return mmu_memory_cache_free_objects(cache);
 }
 
+/* 此函数用于：建立gfn和一个指向它的页表项的反向映射关系 */
 static int rmap_add(struct kvm_vcpu *vcpu, u64 *spte, gfn_t gfn)
 {
 	struct kvm_mmu_page *sp;
@@ -1862,6 +1944,7 @@ static unsigned kvm_page_table_hashfn(gfn_t gfn)
 	return hash_64(gfn, KVM_MMU_HASH_SHIFT);
 }
 
+/* 此函数用于：建立指定mmu page（sp）与其一个父级表项（pte）的反向映射 */
 static void mmu_page_add_parent_pte(struct kvm_vcpu *vcpu,
 				    struct kvm_mmu_page *sp, u64 *parent_pte)
 {
