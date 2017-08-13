@@ -272,21 +272,48 @@ struct kvm_rmap_head {
 };
 
 /*
- * 此结构代表了一个用作影子/ept页表的host页面
+ * 此结构描述了一个用作影子/ept页表的host页面
  */
 struct kvm_mmu_page {
+	/*
+	 * link用于将此mmu page连接到active_mmu_pages链表中，表示当前是active的
+	 */
 	struct list_head link;
+
+	/*
+ 	 * hash_link用于将此mmu page连接到mmu_page_hash哈希表中，gfn域的哈希值作为key
+ 	 */
 	struct hlist_node hash_link;
 
 	/*
 	 * The following two entries are used to key the shadow page in the
 	 * hash table.
 	 */
+
+	/*
+	 * 对于EPT来说，gfn域表示此mmu page所能寻址的guest phy mem内存块（可以是
+	 * 4K/2M/1G）的base address
+	 *
+	 *
+	 * 对于影子来说，gfn代表了guest page table，可参考：
+	 * mmu_alloc_shadow_roots中调用kvm_mmu_get_page时的参数
+	 */
 	gfn_t gfn;
+	/* 此mmu page的一些附加信息 */
 	union kvm_mmu_page_role role;
 
+	/* 此mmu page自己的host虚拟地址 */
 	u64 *spt;
+
 	/* hold the gfn of each spte inside spt */
+	/*
+	 * 对于EPT来说，gfns域不会被使用。可以在kvm_mmu_alloc_page函数中看出来：只
+	 * 有在 !direct 的情况（即影子页表，ept时direct为1）下才会为此域分配内存。
+	 * 在__direct_map（ept缺页时使用）中传入direct为1。
+	 *
+	 *
+	 * 对于影子页表来说，gfns中存储了此mmu page的每一个表项所映射的gfn
+	 */
 	gfn_t *gfns;
 	bool unsync;
 	int root_count;          /* Currently serving as active root */

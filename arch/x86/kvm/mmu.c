@@ -1928,14 +1928,20 @@ static inline void kvm_mod_used_mmu_pages(struct kvm *kvm, int nr)
 	percpu_counter_add(&kvm_total_used_mmu_pages, nr);
 }
 
+/* 此函数用于：释放一个mmu page */
 static void kvm_mmu_free_page(struct kvm_mmu_page *sp)
 {
 	MMU_WARN_ON(!is_empty_shadow_page(sp->spt));
+	/* 从mmu_page_hash哈希表删除 */
 	hlist_del(&sp->hash_link);
+	/* 从active_mmu_pages链表中删除 */
 	list_del(&sp->link);
+	/* 释放其用于页表的物理页面 */
 	free_page((unsigned long)sp->spt);
+	/* EPT情况下不成立 */
 	if (!sp->role.direct)
 		free_page((unsigned long)sp->gfns);
+	/* 释放这个mmu page header */
 	kmem_cache_free(mmu_page_header_cache, sp);
 }
 
@@ -1967,14 +1973,19 @@ static void drop_parent_pte(struct kvm_mmu_page *sp,
 	mmu_spte_clear_no_track(parent_pte);
 }
 
+/* 分配一个用于mmu page的页面。 direct：1表示是EPT页表、0表示是影子页表 */
 static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct)
 {
 	struct kvm_mmu_page *sp;
 
+	/* 分配一个header对象 */
 	sp = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_header_cache);
+	/* 分配一个用于mmu page的页面 */
 	sp->spt = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_cache);
+	/* 只有影子页表才需要gfns域 */
 	if (!direct)
 		sp->gfns = mmu_memory_cache_alloc(&vcpu->arch.mmu_page_cache);
+	/* 将此mmu page header对象指针保存在struct page的private域中 */
 	set_page_private(virt_to_page(sp->spt), (unsigned long)sp);
 
 	/*
@@ -1982,7 +1993,16 @@ static struct kvm_mmu_page *kvm_mmu_alloc_page(struct kvm_vcpu *vcpu, int direct
 	 * page until it is zapped. kvm_zap_obsolete_pages depends on
 	 * this feature. See the comments in kvm_zap_obsolete_pages().
 	 */
+	/*
+	 * 将此mmu page加入到active链表中。这个链表是FIFO的，在回收老mmu page时
+ 	 * 会派上用场。
+	 */
 	list_add(&sp->link, &vcpu->kvm->arch.active_mmu_pages);
+	/*
+	 * 更新相关统计：
+	 * 1）kvm->arch.n_used_mmu_pages：表示当前虚拟机正在使用中的mmu page数量
+	 * 2）kvm_total_used_mmu_pages：表示整个系统中（所有虚拟机）正在使用中的mmu page数量
+	 */
 	kvm_mod_used_mmu_pages(vcpu->kvm, +1);
 	return sp;
 }
@@ -2333,6 +2353,13 @@ static void clear_sp_write_flooding_count(u64 *spte)
 	__clear_sp_write_flooding_count(sp);
 }
 
+/*
+ * 获取已有的或者新分配一个mmu page。
+ * gfn：将赋值给sp->gfn，涵义见struct kvm_mmu_page中的描述
+ * gaddr：表示这个mmu page映射的guest phy addr（EPT页表情况下此参数无用）
+ * direct：1表示是EPT页表、0表示是影子页表
+ * access：guest访问此mmu page映射的guest内存区域的访问权限（uwx形式）
+ */
 static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 					     gfn_t gfn,
 					     gva_t gaddr,
@@ -2348,30 +2375,47 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 	int collisions = 0;
 	LIST_HEAD(invalid_list);
 
+	/*
+	 * 根据传入参数，计算出我们想要一个什么样的mmu page
+	 */
 	role = vcpu->arch.mmu.base_role;
 	role.level = level;
 	role.direct = direct;
 	if (role.direct)
 		role.cr4_pae = 0;
 	role.access = access;
-	if (!vcpu->arch.mmu.direct_map
+	if (!vcpu->arch.mmu.direct_map /* EPT情况下direct_map=true，参见init_kvm_tdp_mmu */
 	    && vcpu->arch.mmu.root_level <= PT32_ROOT_LEVEL) {
 		quadrant = gaddr >> (PAGE_SHIFT + (PT64_PT_BITS * level));
 		quadrant &= (1 << ((PT32_PT_BITS - PT64_PT_BITS) * level)) - 1;
 		role.quadrant = quadrant;
 	}
+
+	/*
+	 * 此循环尝试在现有的active的mmu pages中找出是否有我们想要的
+	 */
 	for_each_valid_sp(vcpu->kvm, sp, gfn) {
+		/* gfn不一样，肯定不是我们想要的，则continue下一个 */
 		if (sp->gfn != gfn) {
 			collisions++;
 			continue;
 		}
 
+		/*
+ 		 * EPT情况下，sp->unsync肯定为false，只有影子可能会设置，设置逻辑可参考：
+ 		 * 	mmu_need_write_protect
+ 		 * 		for_each_gfn_indirect_valid_sp // 如果是EPT mmu page则会跳过
+ 		 * 			kvm_unsync_page
+ 		 * 				sp->unsync = 1;
+ 		 */
 		if (!need_sync && sp->unsync)
 			need_sync = true;
 
+		/* 附加属性不一样，也不是我们想要的，conintue */
 		if (sp->role.word != role.word)
 			continue;
 
+		/* EPT情况不会成立 */
 		if (sp->unsync) {
 			/* The page is good, but __kvm_sync_page might still end
 			 * up zapping it.  If so, break in order to rebuild it.
@@ -2383,6 +2427,7 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 			kvm_make_request(KVM_REQ_TLB_FLUSH, vcpu);
 		}
 
+		/* EPT情况下unsync_children也不用 */
 		if (sp->unsync_children)
 			kvm_make_request(KVM_REQ_MMU_SYNC, vcpu);
 
@@ -2393,12 +2438,16 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 
 	++vcpu->kvm->stat.mmu_cache_miss;
 
+	/* 新分配一个mmu page */
 	sp = kvm_mmu_alloc_page(vcpu, direct);
 
 	sp->gfn = gfn;
 	sp->role = role;
+	/* 将此mmu page链接到kvm->arch.mmu_page_hash哈希链表中，其key是gfn哈希值 */
 	hlist_add_head(&sp->hash_link,
 		&vcpu->kvm->arch.mmu_page_hash[kvm_page_table_hashfn(gfn)]);
+
+	/* EPT情况下不会成立 */
 	if (!direct) {
 		/*
 		 * we should do write protection before syncing pages
@@ -2413,10 +2462,13 @@ static struct kvm_mmu_page *kvm_mmu_get_page(struct kvm_vcpu *vcpu,
 		if (level > PT_PAGE_TABLE_LEVEL && need_sync)
 			flush |= kvm_sync_pages(vcpu, gfn, &invalid_list);
 	}
+	/* 设置此mmu page的初始generation number。mmu_valid_gen作用可参考文档的`Zapping all pages`节 */
 	sp->mmu_valid_gen = vcpu->kvm->arch.mmu_valid_gen;
+	/* 清空mmu page实际用作页表的物理页面 */
 	clear_page(sp->spt);
 	trace_kvm_mmu_get_page(sp, true);
 
+	/* EPT情况下，flush也为false。此处看看是否有需要zap或这flush的事情要做，有的话做掉 */
 	kvm_mmu_flush_or_zap(vcpu, &invalid_list, false, flush);
 out:
 	if (collisions > vcpu->kvm->stat.max_mmu_page_hash_collisions)
