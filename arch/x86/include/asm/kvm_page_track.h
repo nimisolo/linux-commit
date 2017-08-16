@@ -2,7 +2,7 @@
 #define _ASM_X86_KVM_PAGE_TRACK_H
 
 enum kvm_page_track_mode {
-	KVM_PAGE_TRACK_WRITE,
+	KVM_PAGE_TRACK_WRITE, /* track对page的写操作 */
 	KVM_PAGE_TRACK_MAX,
 };
 

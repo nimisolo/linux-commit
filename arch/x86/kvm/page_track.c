@@ -39,6 +39,10 @@ int kvm_page_track_create_memslot(struct kvm_memory_slot *slot,
 {
 	int  i;
 
+	/*
+	 * gfn_track可以理解为二维数组，gfn_track[mode][gfn]表示指定gfn（4K大小）上是否
+	 * track了@mode类型的操作
+	 */
 	for (i = 0; i < KVM_PAGE_TRACK_MAX; i++) {
 		slot->arch.gfn_track[i] = kvzalloc(npages *
 					    sizeof(*slot->arch.gfn_track[i]), GFP_KERNEL);
@@ -88,6 +92,10 @@ static void update_gfn_track(struct kvm_memory_slot *slot, gfn_t gfn,
  * @gfn: the guest page.
  * @mode: tracking mode, currently only write track is supported.
  */
+
+/*
+ * track在指定页面（@gfn）上进行@mode类型的操作
+ */
 void kvm_slot_page_track_add_page(struct kvm *kvm,
 				  struct kvm_memory_slot *slot, gfn_t gfn,
 				  enum kvm_page_track_mode mode)
@@ -96,6 +104,7 @@ void kvm_slot_page_track_add_page(struct kvm *kvm,
 	if (WARN_ON(!page_track_mode_is_valid(mode)))
 		return;
 
+	/* 对该页面进行@mode类型track */
 	update_gfn_track(slot, gfn, mode, 1);
 
 	/*
@@ -104,6 +113,7 @@ void kvm_slot_page_track_add_page(struct kvm *kvm,
 	 */
 	kvm_mmu_gfn_disallow_lpage(slot, gfn);
 
+	/* 如果是track WRITE，则对该gfn进行写保护 */
 	if (mode == KVM_PAGE_TRACK_WRITE)
 		if (kvm_mmu_slot_gfn_write_protect(kvm, slot, gfn))
 			kvm_flush_remote_tlbs(kvm);
@@ -123,6 +133,18 @@ EXPORT_SYMBOL_GPL(kvm_slot_page_track_add_page);
  * @gfn: the guest page.
  * @mode: tracking mode, currently only write track is supported.
  */
+
+/*
+ * 取消在指定页面（@gfn）上进行@mode类型操作的tracking
+ *
+ * 对于track WRITE，为什么此函数中不需要对gfn取消写保护操作？
+ *  1）计数减为0才不track，如果此前add了多次，则此处计数不一定是0 
+ *  2）根本原因是：
+ *  	在影子/EPT页表的page fault处理过程中会调用page_fault_handle_page_track-->
+ *  	kvm_page_track_is_active，它根据计数来判断track是否active的，如果已经不用
+ *  	track了则kvm_page_track_is_active返回false ==> page_fault_handle_page_track
+ *  	返回false，从而page fault处理会继续往下执行、会重新设置上可写权限。
+ */
 void kvm_slot_page_track_remove_page(struct kvm *kvm,
 				     struct kvm_memory_slot *slot, gfn_t gfn,
 				     enum kvm_page_track_mode mode)
@@ -130,6 +152,7 @@ void kvm_slot_page_track_remove_page(struct kvm *kvm,
 	if (WARN_ON(!page_track_mode_is_valid(mode)))
 		return;
 
+	/* 递减该pfn的track计数，如果计数到达0，则表示不再track */
 	update_gfn_track(slot, gfn, mode, -1);
 
 	/*

@@ -8227,6 +8227,10 @@ int kvm_arch_create_memslot(struct kvm *kvm, struct kvm_memory_slot *slot,
 		if (i == 0)
 			continue;
 
+		/*
+		 * lpage_info也可以理解为二维数组，lpage_info[page size][gfn]表示
+		 * 指定gfn是否能够使用page size大小的页面
+		 */
 		linfo = kvzalloc(lpages * sizeof(*linfo), GFP_KERNEL);
 		if (!linfo)
 			goto out_free;
@@ -8252,6 +8256,7 @@ int kvm_arch_create_memslot(struct kvm *kvm, struct kvm_memory_slot *slot,
 		}
 	}
 
+	/* 分配gfn_track数组，track的粒度是4K的页 */
 	if (kvm_page_track_create_memslot(slot, npages))
 		goto out_free;
 

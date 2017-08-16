@@ -713,6 +713,9 @@ struct kvm_vcpu_arch {
 };
 
 struct kvm_lpage_info {
+	/*
+	 * 是否允许使用大页
+	 */
 	int disallow_lpage;
 };
 
@@ -725,7 +728,15 @@ struct kvm_arch_memory_slot {
 	 * rmap用于存储此slot中各gfn所对应的反向映射
 	 */
 	struct kvm_rmap_head *rmap[KVM_NR_PAGE_SIZES];
+
+	/*
+	 * 用于表示某gfn是否允许某level的大页
+	 */
 	struct kvm_lpage_info *lpage_info[KVM_NR_PAGE_SIZES - 1];
+
+	/*
+	 * 用于表示某gfn是否被track
+	 */
 	unsigned short *gfn_track[KVM_PAGE_TRACK_MAX];
 };
 

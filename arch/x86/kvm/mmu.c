@@ -945,11 +945,13 @@ static void update_gfn_disallow_lpage_count(struct kvm_memory_slot *slot,
 	}
 }
 
+/* 标记@gfn不能使用大页 */
 void kvm_mmu_gfn_disallow_lpage(struct kvm_memory_slot *slot, gfn_t gfn)
 {
 	update_gfn_disallow_lpage_count(slot, gfn, 1);
 }
 
+/* 标记@gfn可以使用大页 */
 void kvm_mmu_gfn_allow_lpage(struct kvm_memory_slot *slot, gfn_t gfn)
 {
 	update_gfn_disallow_lpage_count(slot, gfn, -1);
@@ -1602,6 +1604,7 @@ bool kvm_mmu_slot_gfn_write_protect(struct kvm *kvm,
 	int i;
 	bool write_protected = false;
 
+	/*  */
 	for (i = PT_PAGE_TABLE_LEVEL; i <= PT_MAX_HUGEPAGE_LEVEL; ++i) {
 		rmap_head = __gfn_to_rmap(gfn, i, slot);
 		write_protected |= __rmap_write_protect(kvm, rmap_head, true);
@@ -1610,6 +1613,12 @@ bool kvm_mmu_slot_gfn_write_protect(struct kvm *kvm,
 	return write_protected;
 }
 
+/*
+ * 在影子页表情况下被调用
+ *
+ * 对@gfn进行写保护。因为可能有多个表项映射了@gfn，所以需要将这些表项找出来（rmap）并
+ * 将它们全部写保护。
+ */
 static bool rmap_write_protect(struct kvm_vcpu *vcpu, u64 gfn)
 {
 	struct kvm_memory_slot *slot;
@@ -2769,6 +2778,7 @@ static bool mmu_need_write_protect(struct kvm_vcpu *vcpu, gfn_t gfn,
 {
 	struct kvm_mmu_page *sp;
 
+	// 如果此gfn上已经使能了track WRITE，则一定是需要写保护的
 	if (kvm_page_track_is_active(vcpu, gfn, KVM_PAGE_TRACK_WRITE))
 		return true;
 
@@ -2859,6 +2869,7 @@ static int set_spte(struct kvm_vcpu *vcpu, u64 *sptep,
 		if (!can_unsync && is_writable_pte(*sptep))
 			goto set_pte;
 
+		// 如果需要写保护的话，则取消写权限
 		if (mmu_need_write_protect(vcpu, gfn, can_unsync)) {
 			pgprintk("%s: found shadow page for %llx, marking ro\n",
 				 __func__, gfn);
