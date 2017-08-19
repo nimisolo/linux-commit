@@ -4545,6 +4545,7 @@ int emulator_write_phys(struct kvm_vcpu *vcpu, gpa_t gpa,
 	ret = kvm_vcpu_write_guest(vcpu, gpa, val, bytes);
 	if (ret < 0)
 		return 0;
+	// 这个函数会向gpa写数据，所以需要通知注册过的WRITE notifier
 	kvm_page_track_write(vcpu, gpa, val, bytes);
 	return 1;
 }
@@ -4819,6 +4820,7 @@ static int emulator_cmpxchg_emulated(struct x86_emulate_ctxt *ctxt,
 		return X86EMUL_CMPXCHG_FAILED;
 
 	kvm_vcpu_mark_page_dirty(vcpu, gpa >> PAGE_SHIFT);
+	// 此函数也会想gpa写数据，所以也需要通知WRITE notifier
 	kvm_page_track_write(vcpu, gpa, new, bytes);
 
 	return X86EMUL_CONTINUE;
