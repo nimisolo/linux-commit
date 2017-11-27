@@ -91,9 +91,15 @@ void __weak arch_cpu_idle(void)
  */
 void __cpuidle default_idle_call(void)
 {
+	/*
+	 * 检查当前任务（当前是idle任务）是否need resched，如果是则不用idle了嘛
+	 */
 	if (current_clr_polling_and_test()) {
 		local_irq_enable();
 	} else {
+		/*
+		 * 如果需要idle操作，则调用arch_cpu_idle
+		 */
 		stop_critical_timings();
 		arch_cpu_idle();
 		start_critical_timings();
@@ -132,6 +138,10 @@ static int call_cpuidle(struct cpuidle_driver *drv, struct cpuidle_device *dev,
  */
 static void cpuidle_idle_call(void)
 {
+	/*
+	 * 获取当前cpu的cpuidle设备和驱动，通常可以是acpi_driver、intel_driver
+	 * 和none（表示无）
+	 */
 	struct cpuidle_device *dev = cpuidle_get_device();
 	struct cpuidle_driver *drv = cpuidle_get_cpu_driver(dev);
 	int next_state, entered_state;
@@ -152,6 +162,9 @@ static void cpuidle_idle_call(void)
 	 */
 	rcu_idle_enter();
 
+	/*
+	 * 如果没有可用的cpuidle驱动，则使用内核自带的
+	 */
 	if (cpuidle_not_available(drv, dev)) {
 		default_idle_call();
 		goto exit_idle;
@@ -238,6 +251,10 @@ static void do_idle(void)
 		 * detected in the wakeup from idle path that the tick
 		 * broadcast device expired for us, we don't want to go deep
 		 * idle as we know that the IPI is going to arrive right away.
+		 */
+		/*
+		 * 如果使用idle=poll则调用cpu_idle_poll()
+		 * 否则调用cpuidle_idle_call()，里面有机会使用到牛逼的idle驱动
 		 */
 		if (cpu_idle_force_poll || tick_check_broadcast_expired())
 			cpu_idle_poll();

@@ -329,6 +329,9 @@ void arch_cpu_idle_dead(void)
  */
 void arch_cpu_idle(void)
 {
+	/*
+	 * 调用指定的内核自带idle例程，在select_idle_routine中指定的
+	 */
 	x86_idle();
 }
 
@@ -455,6 +458,11 @@ void select_idle_routine(const struct cpuinfo_x86 *c)
 	if (x86_idle || boot_option_idle_override == IDLE_POLL)
 		return;
 
+	/*
+	 * 选择内核自带的idle例程：
+	 *  如果支持MWAIT，则优先用MWAIT
+	 *  最后才选择default_idle，即用HALT指令
+	 */
 	if (boot_cpu_has_bug(X86_BUG_AMD_E400)) {
 		pr_info("using AMD E400 aware idle routine\n");
 		x86_idle = amd_e400_idle;
