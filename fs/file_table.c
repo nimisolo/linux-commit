@@ -205,6 +205,7 @@ static void __fput(struct file *file)
 			file->f_op->fasync(-1, file, 0);
 	}
 	ima_file_free(file);
+	/* 调用file的release回调 */
 	if (file->f_op->release)
 		file->f_op->release(inode, file);
 	security_file_free(file);
@@ -264,10 +265,15 @@ static DECLARE_DELAYED_WORK(delayed_fput_work, delayed_fput);
 
 void fput(struct file *file)
 {
+	/* 递减file对象的引用计数，如果这已是最后一个引用了，则进入： */
 	if (atomic_long_dec_and_test(&file->f_count)) {
 		struct task_struct *task = current;
 
 		if (likely(!in_interrupt() && !(task->flags & PF_KTHREAD))) {
+			/*
+			 * 初始化一个task_work回调，执行体是____fput，并加入到
+			 * task的task_works回调链表中
+			 */
 			init_task_work(&file->f_u.fu_rcuhead, ____fput);
 			if (!task_work_add(task, &file->f_u.fu_rcuhead, true))
 				return;

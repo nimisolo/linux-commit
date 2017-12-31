@@ -773,6 +773,9 @@ static void check_stack_usage(void)
 static inline void check_stack_usage(void) {}
 #endif
 
+/*
+ * task退出最终都会走这个函数
+ */
 void __noreturn do_exit(long code)
 {
 	struct task_struct *tsk = current;
@@ -870,11 +873,13 @@ void __noreturn do_exit(long code)
 
 	exit_sem(tsk);
 	exit_shm(tsk);
+	/* 释放task中打开的文件句柄资源 */
 	exit_files(tsk);
 	exit_fs(tsk);
 	if (group_dead)
 		disassociate_ctty(1);
 	exit_task_namespaces(tsk);
+	/* task的task_works回调链表中如果有元素，则会依次调用每个元素的func */
 	exit_task_work(tsk);
 	exit_thread(tsk);
 
@@ -933,6 +938,7 @@ void __noreturn do_exit(long code)
 	exit_rcu();
 	TASKS_RCU(__srcu_read_unlock(&tasks_rcu_exit_srcu, tasks_rcu_i));
 
+	/* 将task置为TASK_DEAD状态，并主动调用__schedule函数调度其他任务 */
 	do_task_dead();
 }
 EXPORT_SYMBOL_GPL(do_exit);
@@ -974,11 +980,18 @@ do_group_exit(int exit_code)
 		else {
 			sig->group_exit_code = exit_code;
 			sig->flags = SIGNAL_GROUP_EXIT;
+			/*
+			 * 如果current所属线程组中还包含其他线程，则通知
+			 * 其他线程也结束
+			 */
 			zap_other_threads(current);
 		}
 		spin_unlock_irq(&sighand->siglock);
 	}
 
+	/*
+	 * current执行结束流程
+	 */
 	do_exit(exit_code);
 	/* NOTREACHED */
 }

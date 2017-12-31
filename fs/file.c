@@ -393,6 +393,7 @@ static struct fdtable *close_files(struct files_struct * files)
 	struct fdtable *fdt = rcu_dereference_raw(files->fdt);
 	unsigned int i, j = 0;
 
+	/* 依次关闭fdt中的每一个file对象 s*/
 	for (;;) {
 		unsigned long set;
 		i = j * BITS_PER_LONG;
@@ -431,6 +432,9 @@ struct files_struct *get_files_struct(struct task_struct *task)
 void put_files_struct(struct files_struct *files)
 {
 	if (atomic_dec_and_test(&files->count)) {
+		/*
+		 * close_files会依次释放fd表中的句柄
+		 */
 		struct fdtable *fdt = close_files(files);
 
 		/* free the arrays if they are not embedded */
@@ -460,6 +464,9 @@ void exit_files(struct task_struct *tsk)
 		task_lock(tsk);
 		tsk->files = NULL;
 		task_unlock(tsk);
+		/*
+		 * 释放文件资源
+		 */
 		put_files_struct(files);
 	}
 }

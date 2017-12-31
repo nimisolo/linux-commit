@@ -1103,7 +1103,7 @@ static int mapping_level(struct kvm_vcpu *vcpu, gfn_t large_gfn,
  *
  * pte_list_add函数返回：在加入此spte之前（rmap_head）对应的gfn已经有
  * 多少个反向映射了。
- * 
+ *
  * *重要补充*： rmap_head并不一定只对应gfn，还可以对应mmu page本身！也
  * 		就是说，mmu page本身也可以有与其上一级页表项的反向映射。
  */

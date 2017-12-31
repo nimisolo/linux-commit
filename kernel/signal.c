@@ -2323,6 +2323,9 @@ relock:
 		/*
 		 * Death signals, no core dump.
 		 */
+		/*
+		 * 走到这里，task需要exit了
+		 */
 		do_group_exit(ksig->info.si_signo);
 		/* NOTREACHED */
 	}

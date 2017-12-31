@@ -1135,6 +1135,7 @@ int filp_close(struct file *filp, fl_owner_t id)
 		dnotify_flush(filp, id);
 		locks_remove_posix(filp, id);
 	}
+	/* 释放指定的file对象 */
 	fput(filp);
 	return retval;
 }

@@ -805,6 +805,9 @@ void do_signal(struct pt_regs *regs)
 {
 	struct ksignal ksig;
 
+	/*
+	 * 通过get_signal获取已收到的signal
+	 */
 	if (get_signal(&ksig)) {
 		/* Whee! Actually deliver the signal.  */
 		handle_signal(&ksig, regs);

@@ -152,6 +152,9 @@ static void exit_to_usermode_loop(struct pt_regs *regs, u32 cached_flags)
 		if (cached_flags & _TIF_UPROBE)
 			uprobe_notify_resume(regs);
 
+		/*
+		 * 如果有signal pending，则通过do_signal进行处理
+		 */
 		/* deal with pending signal delivery */
 		if (cached_flags & _TIF_SIGPENDING)
 			do_signal(regs);
@@ -177,6 +180,9 @@ static void exit_to_usermode_loop(struct pt_regs *regs, u32 cached_flags)
 	}
 }
 
+/*
+ * 这个函数在中断或者syscall结束并返回到usermode时候会被调用
+ */
 /* Called with IRQs disabled. */
 __visible inline void prepare_exit_to_usermode(struct pt_regs *regs)
 {
@@ -190,6 +196,10 @@ __visible inline void prepare_exit_to_usermode(struct pt_regs *regs)
 
 	cached_flags = READ_ONCE(ti->flags);
 
+	/*
+	 * 有多种条件可进入exit_to_usermode_loop，但是此次对于我们的场景，
+	 * 是由于有signal pending而进入的
+	 */
 	if (unlikely(cached_flags & EXIT_TO_USERMODE_LOOP_FLAGS))
 		exit_to_usermode_loop(regs, cached_flags);
 
