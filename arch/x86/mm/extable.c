@@ -117,11 +117,11 @@ int fixup_exception(struct pt_regs *regs, int trapnr)
 	}
 #endif
 
-	e = search_exception_tables(regs->ip);
+	e = search_exception_tables(regs->ip);	// 搜索fixup exception表
 	if (!e)
 		return 0;
 
-	handler = ex_fixup_handler(e);
+	handler = ex_fixup_handler(e);	// 如果找到了对应的handler，则调用handler处理
 	return handler(e, regs, trapnr);
 }
 

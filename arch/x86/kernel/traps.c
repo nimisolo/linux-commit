@@ -533,8 +533,8 @@ do_general_protection(struct pt_regs *regs, long error_code)
 	}
 
 	tsk = current;
-	if (!user_mode(regs)) {
-		if (fixup_exception(regs, X86_TRAP_GP))
+	if (!user_mode(regs)) { // 如果#GP是在内核态触发的
+		if (fixup_exception(regs, X86_TRAP_GP))	// 从.fixup段中查找有没有对应的处理函数
 			return;
 
 		tsk->thread.error_code = error_code;

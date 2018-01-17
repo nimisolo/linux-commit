@@ -150,6 +150,12 @@ native_write_msr(unsigned int msr, u32 low, u32 high)
 		do_trace_write_msr(msr, ((u64)high << 32 | low), 0);
 }
 
+/*
+ * 这是带exception handler的wrmsr
+ * 如果wrmsr发生异常（例如#GP）则会调到Label 3处执行，将err设置为-EIO，
+ * 然后跳到Label 1，随即return。所以调用此函数的话，wrmsr发生异常的话
+ * 只是返回错误码，并不会导致panic
+ */
 /* Can be uninlined because referenced by paravirt */
 static inline int notrace
 native_write_msr_safe(unsigned int msr, u32 low, u32 high)
