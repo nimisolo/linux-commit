@@ -178,10 +178,17 @@ int __anon_vma_prepare(struct vm_area_struct *vma)
 
 	might_sleep();
 
+	/*
+	 * 分配一个anon_vma_chain对象
+	 */
 	avc = anon_vma_chain_alloc(GFP_KERNEL);
 	if (!avc)
 		goto out_enomem;
 
+	/*
+	 * 搞到一个anon_vma对象：看看是否能和此vma的前后vma共用，
+	 * 不能的话就重新分配一个。
+	 */
 	anon_vma = find_mergeable_anon_vma(vma);
 	allocated = NULL;
 	if (!anon_vma) {
@@ -195,6 +202,9 @@ int __anon_vma_prepare(struct vm_area_struct *vma)
 	/* page_table_lock to protect against threads */
 	spin_lock(&mm->page_table_lock);
 	if (likely(!vma->anon_vma)) {
+		/*
+		 * 将vma、anon_vma、anon_vma_chain三者关联起来
+		 */
 		vma->anon_vma = anon_vma;
 		anon_vma_chain_link(vma, avc, anon_vma);
 		/* vma reference or self-parent link for new root */
@@ -996,8 +1006,10 @@ static void __page_set_anon_rmap(struct page *page,
 	if (!exclusive)
 		anon_vma = anon_vma->root;
 
+	/* 设置page的mapping，PAGE_MAPPING_ANON只是作为是个匿名映射的标记 */
 	anon_vma = (void *) anon_vma + PAGE_MAPPING_ANON;
 	page->mapping = (struct address_space *) anon_vma;
+	/* index表示此page对应的virtual address在此vma中的索引 */
 	page->index = linear_page_index(vma, address);
 }
 

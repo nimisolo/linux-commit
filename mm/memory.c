@@ -2904,6 +2904,9 @@ static int do_anonymous_page(struct vm_fault *vmf)
 		goto setpte;
 	}
 
+	/*
+	 * 为此vma准备反向映射相关对象，如果此vma已经有了，anon_vma_prepare会直接返回
+	 */
 	/* Allocate our own private page. */
 	if (unlikely(anon_vma_prepare(vma)))
 		goto oom;
@@ -2939,6 +2942,7 @@ static int do_anonymous_page(struct vm_fault *vmf)
 	}
 
 	inc_mm_counter_fast(vma->vm_mm, MM_ANONPAGES);
+	/* 为此page建立反向映射信息 */
 	page_add_new_anon_rmap(page, vma, vmf->address, false);
 	mem_cgroup_commit_charge(page, memcg, false, false);
 	lru_cache_add_active_or_unevictable(page, vma);
